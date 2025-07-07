@@ -3,91 +3,195 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import os
+from wotan import flatten
+import batman
+from scipy.optimize import curve_fit
+import sys
+import joblib # Import joblib for loading the model
 
 # --- Configuration and Setup ---
+
+# Print the Python executable path for debugging
+print(f"DEBUG: Python executable: {sys.executable}\n")
 
 # Get the absolute path of the directory containing the script
 script_dir = os.path.dirname(os.path.abspath(__file__))
 
-# Construct absolute paths for input and output files
-data_file_path = os.path.join(script_dir, 'starData.csv')
-output_dir = os.path.join(script_dir, 'export')
+# Define the input directory where the downloaded light curve CSVs are stored
+input_dir = '/home/sighw/codes/Finding-Classifying-Analysing-Exoplanets/lightScript/export'
 
-# Create the output directory if it doesn't exist
+# Define the output directory for plots and extracted parameters
+output_dir = os.path.join(script_dir, 'analyzed_plots')
+
+# Create the base output directory if it doesn't exist
 os.makedirs(output_dir, exist_ok=True)
 
-print(f"Analysing File-1")
+# Define the path for the extracted parameters CSV
+parameters_csv_path = os.path.join(output_dir, 'extracted_features.csv')
 
-# --- CSV Parsing ---
-# Note that we skip the first 4 rows from any of the excel sheets as they are not important
-df = pd.read_csv(data_file_path, skiprows=4)
+# Define the path to the trained classifier model (updated name)
+classifier_model_path = os.path.join(script_dir, '..', 'verifying', 'random_forest_exoplanet_classifier.joblib')
 
-# --- Lightcurve Analysis ---
-for i in range(df.shape[0]):
+# Initialize the parameters CSV with headers if it doesn't exist
+# Added 'classification' column for the model's prediction
+if not os.path.exists(parameters_csv_path):
+    with open(parameters_csv_path, 'w') as f:
+        f.write("filename,period,t0,rp_rs,a_rs,inc,duration,depth,snr,classification\n")
 
-    starstr = "TIC " + str(df.iloc[i, 0])
-    print(f"Analysing index - {i}")
+print(f"--- Starting analysis of light curves from: {input_dir} ---\n")
 
-    try:
-        initial = lk.search_lightcurve(starstr)  # Searching the data for the a given "starstr"
-        rows = len(initial)
-    except KeyboardInterrupt:
-        print(f"Analysis interrupted by user for {starstr} on index {i}.")
-        break # Exit the loop gracefully
-    except Exception as e:
-        print(f"{starstr}[all] skipped. Error: {e}")
-        continue
+# --- Load the pre-trained classifier model ---
+try:
+    classifier_model = joblib.load(classifier_model_path)
+    print(f"Classifier model loaded from: {classifier_model_path}\n")
+except FileNotFoundError:
+    classifier_model = None
+    print(f"Warning: Classifier model not found at {classifier_model_path}. Classification will be skipped.\n")
+except Exception as e:
+    classifier_model = None
+    print(f"Error loading classifier model: {e}. Classification will be skipped.\n")
 
-    # This is the program to analyse each subset data of a particular "starstr"
-    for row in range(rows):
+# --- Transit Model Function for curve_fit ---
+def transit_model_for_fit(time, period, t0, rp_rs, a_rs, inc):
+    params = batman.TransitParams()  # object to store transit parameters
+    params.t0 = t0                    # time of inferior conjunction
+    params.per = period               # orbital period
+    params.rp = rp_rs                 # planet radius (in units of stellar radii)
+    params.a = a_rs                   # semi-major axis (in units of stellar radii)
+    params.inc = inc                  # orbital inclination (in degrees)
+    params.ecc = 0.0                  # eccentricity (fixed for simplicity)
+    params.w = 90.0                   # longitude of periastron (fixed for simplicity)
+    params.limb_dark = "quadratic"    # limb darkening model
+    params.u = [0.3, 0.2]             # limb darkening coefficients (fixed for simplicity)
 
-        try:
-            file1 = initial[row].download(quality_bitmask="default").remove_nans()
-            temporary_file = file1.remove_outliers(sigma=4).flatten()
-        except KeyboardInterrupt:
-            print(f"Analysis interrupted by user for {starstr} on index {i}, subset {row}.")
-            break # Exit the inner loop gracefully
-        except Exception as e:
-            print(f"{starstr}[{rows}] skipped for subset {row}. Error: {e}")
-            continue
+    m = batman.TransitModel(params, time)
+    return m.light_curve(params)
 
-        # We use two seperate files to be analysed, as a result we get 2 figures for every subset
-        # This is because the "to_periodogram" function does not do a good job in finding the accurate time period
-        # The method we use does not guarentee a 100% accuracy either
-        periodogram_file_1 = temporary_file.to_periodogram(method="bls")
-        periodogram_file_2 = temporary_file.to_periodogram(method="bls", period=np.arange(1, 16, 0.01))
+# --- Lightcurve Analysis Loop ---
 
-        time_period_file1 = periodogram_file_1.period_at_max_power
-        time_period_file2 = periodogram_file_2.period_at_max_power
+# Walk through the input directory to find all CSV files, including in subfolders
+for root, _, files in os.walk(input_dir):
+    for filename in files:
+        if filename.endswith('.csv'):
+            file_path = os.path.join(root, filename)
+            print(f"\n--- Analysing file: {filename} ---")
 
-        # Check if periodogram results are valid before folding
-        if time_period_file1 is None or time_period_file2 is None:
-            print(f"Could not determine period for {starstr}. Skipping folding and plotting.")
-            continue # Skip to next subset
+            classification_result = "N/A" # Default classification result
+            extracted_snr = np.nan # Default SNR
 
-        final_file_1 = temporary_file.fold(period=time_period_file1)
-        final_file_2 = temporary_file.fold(period=time_period_file2)
+            try:
+                # Read the CSV file into a Pandas DataFrame
+                df_lc = pd.read_csv(file_path)
 
-        # Create a DataFrame with the folded light curve data
-        df_folded = final_file_1.to_pandas()
+                # Convert DataFrame to a Lightkurve LightCurve object
+                lc = lk.LightCurve(time=df_lc['time'], flux=df_lc['flux'])
 
-        # Extract x and y for fitting
-        x_data = final_file_1.time.value
-        y_data = final_file_1.flux.value
+                # Remove NaNs before detrending
+                lc = lc.remove_nans()
 
-        # Perform polynomial fit (degree 18, as in original code)
-        z = np.polyfit(x_data, y_data, 18)
-        f = np.poly1d(z)
+                # --- Advanced Detrending with Wotan ---
+                flat_flux, trend_flux = flatten(lc.time.value, lc.flux.value,
+                                                method='biweight', window_length=0.5,
+                                                return_trend=True)
 
-        # Generate new x values for the fitted line
-        x_new = np.linspace(x_data.min(), x_data.max(), 100)
-        y_new = f(x_new)
+                # Create a new LightCurve object with the detrended flux
+                detrended_lc = lk.LightCurve(time=lc.time.value, flux=flat_flux)
 
-        # --- Plotting ---
-        ax = final_file_1.plot() # Get the axes object from lightkurve plot
-        ax.plot(x_new, y_new, color='red', linewidth=2, label='Polynomial Fit') # Overlay the fitted line
-        ax.set_title(f'Folded Light Curve for TIC {starstr}')
-        ax.legend()
-        plt.savefig(os.path.join(output_dir, starstr + f"[normal][index {i}].png"))  # Plot 1
-        print(f"Plot generated for {starstr} (normal periodogram).")
-        plt.close('all')
+                # Periodogram analysis on the detrended light curve
+                periodogram_lc = detrended_lc.to_periodogram(method="bls")
+                time_period_lc = periodogram_lc.period_at_max_power
+                extracted_snr = periodogram_lc.max_power # Use max_power as SNR proxy
+
+                # Check if periodogram results are valid before folding
+                if time_period_lc is None:
+                    print(f"Could not determine period for {filename}. Skipping folding and plotting.\n")
+                    continue
+
+                # Estimate t0 (time of first transit) - for simplicity, use the time of minimum flux
+                t0_estimate = detrended_lc.time[np.argmin(detrended_lc.flux)].value
+
+                folded_lc = detrended_lc.fold(period=time_period_lc, t0=t0_estimate)
+
+                # Extract x and y for fitting
+                x_data = folded_lc.time.value
+                y_data = folded_lc.flux.value
+
+                # --- Initial Guesses for Batman Parameters for curve_fit ---
+                initial_guesses = [
+                    time_period_lc.value,  # period
+                    t0_estimate,           # t0
+                    (1.0 - np.min(y_data))**0.5, # rp_rs (rough estimate)
+                    10.0,                  # a_rs (typical value, might need refinement)
+                    89.0                   # inc (close to 90 for transiting)
+                ]
+
+                # Bounds for parameters
+                bounds = (
+                    [time_period_lc.value * 0.9, t0_estimate - 0.1, 0.01, 1.0, 80.0],
+                    [time_period_lc.value * 1.1, t0_estimate + 0.1, 0.5, 50.0, 90.0]
+                )
+
+                # --- Fit Transit Model using curve_fit ---
+                try:
+                    popt, pcov = curve_fit(transit_model_for_fit, x_data, y_data, p0=initial_guesses, bounds=bounds)
+                    fitted_period, fitted_t0, fitted_rp_rs, fitted_a_rs, fitted_inc = popt
+
+                    # Generate model flux with fitted parameters
+                    model_flux = transit_model_for_fit(x_data, *popt)
+
+                    # Calculate duration and depth from fitted parameters
+                    fitted_depth = fitted_rp_rs**2
+                    transit_points = x_data[y_data < (1 - fitted_depth * 0.5)]
+                    fitted_duration = np.max(transit_points) - np.min(transit_points) if len(transit_points) > 1 else 0.0
+
+                    # --- Classification ---
+                    if classifier_model:
+                        # Create a feature vector for prediction
+                        # Order: period, depth, duration, inc, rp_rs, snr
+                        feature_vector = np.array([[fitted_period, fitted_depth, fitted_duration, fitted_inc, fitted_rp_rs, extracted_snr]])
+                        
+                        # Make prediction
+                        prediction = classifier_model.predict(feature_vector)[0]
+                        classification_result = "Exoplanet" if prediction == 1 else "False Positive"
+                        print(f"Classification for {filename}: {classification_result}\n")
+
+                    # Save extracted parameters and classification to CSV
+                    with open(parameters_csv_path, 'a') as f:
+                        f.write(f"{filename},{fitted_period},{fitted_t0},{fitted_rp_rs},{fitted_a_rs},{fitted_inc},{fitted_duration},{fitted_depth},{extracted_snr},{classification_result}\n")
+                    print(f"Extracted parameters saved for {filename}.\n")
+
+                except RuntimeError as e:
+                    print(f"Could not fit transit model for {filename}: {e}\n")
+                    model_flux = np.full_like(x_data, np.nan) # Use NaNs if fit fails
+                    # Save a row with NaNs for failed fits and N/A classification
+                    with open(parameters_csv_path, 'a') as f:
+                        f.write(f"{filename},NaN,NaN,NaN,NaN,NaN,NaN,NaN,{extracted_snr},{classification_result}\n")
+
+                # --- Plotting ---
+                fig, ax = plt.subplots(figsize=(10, 6))
+                folded_lc.plot(ax=ax, marker='.', linestyle='none', label='Detrended Folded Light Curve')
+                ax.plot(x_data, model_flux, color='green', linewidth=2, label='Batman Transit Model')
+                ax.set_title(f'Folded Light Curve with Transit Model for {filename.replace("_lightcurve.csv", "")}\nClassification: {classification_result}')
+                ax.legend()
+                plt.tight_layout()
+
+                # Determine the mission subdirectory for saving the plot
+                relative_path = os.path.relpath(file_path, input_dir)
+                mission_subfolder = os.path.dirname(relative_path)
+
+                plot_save_dir = os.path.join(output_dir, mission_subfolder)
+                os.makedirs(plot_save_dir, exist_ok=True)
+
+                plot_filename = os.path.join(plot_save_dir, filename.replace(".csv", ".png"))
+                plt.savefig(plot_filename)
+                print(f"Plot generated for {filename} and saved to {plot_save_dir}/\n")
+                plt.close(fig)
+
+            except KeyboardInterrupt:
+                print(f"Analysis interrupted by user for {filename}.\n")
+                break
+            except Exception as e:
+                print(f"Skipped {filename}. Error: {e}\n")
+                continue
+
+print("--- Analysis complete for all available light curves. ---\n")

@@ -1,7 +1,7 @@
 # Finding-Classifying-Analysing-Exoplanets
 
 ## Overview
-This project provides code to analyze light curve data from the MAST database using the `lightkurve` module. The primary goal is to process stellar light curves to identify and characterize potential exoplanets.
+This project focuses on finding, classifying, and analyzing exoplanets. It involves advanced light curve data acquisition, sophisticated preprocessing, and machine learning for characterization.
 
 ## Getting Started
 
@@ -14,20 +14,39 @@ source env/bin/activate
 ```
 
 ### 2. Install Required Python Modules
-With your virtual environment activated, install the necessary libraries using pip:
+With your virtual environment activated, install the necessary libraries using pip. This project now utilizes `lightkurve`, `pandas`, `numpy`, `matplotlib`, `wotan`, `batman-package`, `scikit-learn`, and `joblib`.
 
 ```bash
-pip install pandas numpy lightkurve matplotlib
+pip install pandas numpy lightkurve matplotlib wotan batman-package scikit-learn joblib
 ```
 
-### 3. Run the Lightcurve Plotting Module
-The core lightcurve analysis and plotting is performed by the `analyzeLightcurves.py` script, located in the `lightCurves` directory. This script will read data from `lightCurves/starData.csv`, process it, and save the generated plots into the `lightCurves/export/` directory.
+### 3. Data Acquisition (`lightScript`)
+This module handles advanced light curve data acquisition from astronomical archives. It uses `lightkurve` to search for and download all available light curves for a selected target star (e.g., Kepler, TESS missions). Downloaded CSV files are automatically organized into mission-specific subfolders within `/lightScript/export/`.
 
-To run the script, ensure your virtual environment is activated and execute the following command from the project's root directory:
+To download data, run the script and follow the prompts:
+
+```bash
+./lightScript/download_lightcurves.py
+```
+
+### 4. Light Curve Analysis and Preprocessing (`lightCurves`)
+This module processes the downloaded light curve data. It performs advanced detrending using the `wotan` library to remove stellar variability and instrumental noise. It then conducts Box-Least Squares (BLS) periodogram analysis, folds the light curves, and generates plots of the folded light curves with polynomial fits. These plots are saved into organized mission-specific subfolders within `/lightCurves/analyzed_plots/`.
+
+To run the analysis, ensure your virtual environment is activated and execute the following command from the project's root directory:
 
 ```bash
 python lightCurves/analyzeLightcurves.py
 ```
 
-### Note on the Verifying Module
-The `verifying` module, which contains code for classifying exoplanets using neural networks, is located in the `verifying` directory. Its main notebook is `neuralNetworks.ipynb`, and it uses `exoplanetFeatures.csv` and `exoplanetLabels.csv` as input data.
+### 5. Exoplanet Classification (`verifying`)
+This module contains resources for exoplanet classification and verification. It includes `exoplanetFeatures.csv` and `exoplanetLabels.csv` as input data.
+
+#### Training the Classifier
+Before running the analysis, you need to train the exoplanet classifier. This script uses a subset of features from `exoplanetFeatures.csv` to train a Random Forest model and saves it for later use.
+
+```bash
+python verifying/train_classifier.py
+```
+
+#### Integrated Classification
+The `lightCurves/analyzeLightcurves.py` script now integrates this classification. After extracting features from each light curve, it loads the trained model from `verifying/random_forest_exoplanet_classifier.joblib` and predicts whether the light curve corresponds to an "Exoplanet" or a "False Positive". The classification result is included in the output CSV and the generated plots.
