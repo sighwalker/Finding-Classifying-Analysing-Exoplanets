@@ -3,12 +3,6 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import os
-<<<<<<< HEAD:LightCurves/Lightkurve_ExoplanetProject_Array_Solved.py
-=======
-import sys
-import astropy
-from datetime import *
->>>>>>> fixed:lightCurves/analyzeLightcurves.py
 
 # --- Configuration and Setup ---
 
@@ -16,11 +10,7 @@ from datetime import *
 script_dir = os.path.dirname(os.path.abspath(__file__))
 
 # Construct absolute paths for input and output files
-<<<<<<< HEAD:LightCurves/Lightkurve_ExoplanetProject_Array_Solved.py
-data_file_path = os.path.join(script_dir, 'StarData_1.csv')
-=======
 data_file_path = os.path.join(script_dir, 'starData.csv')
->>>>>>> fixed:lightCurves/analyzeLightcurves.py
 output_dir = os.path.join(script_dir, 'export')
 
 # Create the output directory if it doesn't exist
@@ -29,79 +19,6 @@ os.makedirs(output_dir, exist_ok=True)
 print(f"Analysing File-1")
 
 # --- CSV Parsing ---
-<<<<<<< HEAD:LightCurves/Lightkurve_ExoplanetProject_Array_Solved.py
-# The CSV has comment lines, a comma-separated header, and comma-separated data.
-# We need to parse it carefully.
-
-column_names = []
-data_rows = []
-
-with open(data_file_path, 'r') as f:
-    for i, line in enumerate(f):
-        if i == 4: # This is the 5th line (index 4), which is the header
-            column_names = [col.strip() for col in line.strip().split(',')]
-        elif i >= 5: # Data starts from the 6th line (index 5)
-            data_rows.append([item.strip() for item in line.strip().split(',')])
-
-# Create DataFrame from parsed data and assign column names
-df = pd.DataFrame(data_rows, columns=column_names)
-
-# Ensure 'ID' column is numeric and handle potential non-numeric entries
-df['ID'] = pd.to_numeric(df['ID'], errors='coerce')
-df.dropna(subset=['ID'], inplace=True) # Remove rows where ID could not be converted
-tic_list = np.array(df['ID'], dtype=int) # Convert to integer array
-
-print(f"Found {len(tic_list)} TIC IDs to analyze.")
-
-# --- Lightcurve Analysis ---
-for tic_id in tic_list:
-    print(f"\nAnalyzing TIC ID: {tic_id}")
-    try:
-        # Search for the light curve
-        # Using f'TIC {tic_id}' ensures the correct format for lightkurve search
-        lc_search = lk.search_lightcurve(f'TIC {tic_id}', author="SPOC", exptime=120)
-        
-        if not lc_search:
-            print(f"No light curves found for TIC {tic_id}. Skipping.")
-            continue
-
-        # Download, stitch, flatten, and remove outliers
-        lc = lc_search.download().stitch().flatten(window_length=901).remove_outliers()
-
-        # Create a periodogram to find the planet's period
-        period = np.linspace(1, 20, 10000)
-        bls = lc.to_periodogram(method='bls', period=period, frequency_factor=500)
-        planet_x_period = bls.period_at_max_power
-        planet_x_t0 = bls.transit_time_at_max_power
-
-        # Fold the light curve at the found period
-        folded_lc = lc.fold(period=planet_x_period, epoch_time=planet_x_t0)
-
-        # Create a DataFrame with the folded light curve data
-        # lightkurve objects can be directly converted to pandas DataFrames
-        df_folded = folded_lc.to_pandas()
-
-        # Save the DataFrame to a CSV file
-        output_file_path = os.path.join(output_dir, f'Folded_Lightcurve_Data_{tic_id}.csv')
-        df_folded.to_csv(output_file_path, index=False)
-
-        print(f'Successfully processed and saved data for TIC {tic_id} to {output_file_path}')
-
-        # --- Plotting (Optional, if you want to generate plots) ---
-        # This part was in the original script, but lightkurve has built-in plotting.
-        # If you want to use matplotlib directly, ensure data is numeric.
-        # For simplicity, I'm removing the complex polyfit plotting from the original
-        # and suggesting lightkurve's built-in plot or a simpler matplotlib plot.
-        
-        # Example of lightkurve's built-in plot:
-        # folded_lc.plot()
-        # plt.title(f'Folded Light Curve for TIC {tic_id}')
-        # plt.savefig(os.path.join(output_dir, f'Folded_Lightcurve_Plot_{tic_id}.png'))
-        # plt.close('all')
-
-    except Exception as e:
-        print(f"An error occurred for TIC ID {tic_id}: {e}")
-=======
 # Note that we skip the first 4 rows from any of the excel sheets as they are not important
 df = pd.read_csv(data_file_path, skiprows=4)
 
@@ -115,7 +32,8 @@ for i in range(df.shape[0]):
         initial = lk.search_lightcurve(starstr)  # Searching the data for the a given "starstr"
         rows = len(initial)
     except KeyboardInterrupt:
-        sys.exit(print(f"Last file analysed is - 1, on index {i}"))
+        print(f"Analysis interrupted by user for {starstr} on index {i}.")
+        break # Exit the loop gracefully
     except Exception as e:
         print(f"{starstr}[all] skipped. Error: {e}")
         continue
@@ -127,9 +45,10 @@ for i in range(df.shape[0]):
             file1 = initial[row].download(quality_bitmask="default").remove_nans()
             temporary_file = file1.remove_outliers(sigma=4).flatten()
         except KeyboardInterrupt:
-            sys.exit(print(f"Last file analysed is - 1, on index {i}"))
+            print(f"Analysis interrupted by user for {starstr} on index {i}, subset {row}.")
+            break # Exit the inner loop gracefully
         except Exception as e:
-            print(f"{starstr}[{rows}] skipped. Error: {e}")
+            print(f"{starstr}[{rows}] skipped for subset {row}. Error: {e}")
             continue
 
         # We use two seperate files to be analysed, as a result we get 2 figures for every subset
@@ -141,55 +60,34 @@ for i in range(df.shape[0]):
         time_period_file1 = periodogram_file_1.period_at_max_power
         time_period_file2 = periodogram_file_2.period_at_max_power
 
+        # Check if periodogram results are valid before folding
+        if time_period_file1 is None or time_period_file2 is None:
+            print(f"Could not determine period for {starstr}. Skipping folding and plotting.")
+            continue # Skip to next subset
+
         final_file_1 = temporary_file.fold(period=time_period_file1)
         final_file_2 = temporary_file.fold(period=time_period_file2)
 
-        x1 = final_file_1["time"]
-        y1 = final_file_1["flux"]
-        x2 = final_file_2["time"]
-        y2 = final_file_2["flux"]
+        # Create a DataFrame with the folded light curve data
+        df_folded = final_file_1.to_pandas()
 
-        def timecorr(timearr):
-            l = []
-            for i in timearr:
-                i = i.to_datetime()
-                i = i.total_seconds()
-                l.append(i)
-            return l
+        # Extract x and y for fitting
+        x_data = final_file_1.time.value
+        y_data = final_file_1.flux.value
 
-        x1 = timecorr(x1)
-        x2 = timecorr(x2)
+        # Perform polynomial fit (degree 18, as in original code)
+        z = np.polyfit(x_data, y_data, 18)
+        f = np.poly1d(z)
 
-        def fluxcorr(fluxarr):
-            l = []
-            for i in fluxarr:
-                i = i.to_value()
-                l.append(i)
-            return l
+        # Generate new x values for the fitted line
+        x_new = np.linspace(x_data.min(), x_data.max(), 100)
+        y_new = f(x_new)
 
-        y1 = fluxcorr(y1)
-        y2 = fluxcorr(y2)
-
-        z1=np.polyfit(x1,y1,18)
-        f1=np.poly1d(z1)
-        z2=np.polyfit(x2,y2,18)
-        f2=np.poly1d(z2)
-
-        x1_new=np.linspace(x1[1],x1[-1],10)
-        y1_new=f1(x1_new)
-
-        x2_new=np.linspace(x2[1],x2[-1],10)
-        y2_new=f2(x2_new)
-
-        plt.plot(x1, y1, 'o', x1_new,y1_new)
-        plt.xlim(x1[0]-1,x1[-1]+1)
+        # --- Plotting ---
+        ax = final_file_1.plot() # Get the axes object from lightkurve plot
+        ax.plot(x_new, y_new, color='red', linewidth=2, label='Polynomial Fit') # Overlay the fitted line
+        ax.set_title(f'Folded Light Curve for TIC {starstr}')
+        ax.legend()
         plt.savefig(os.path.join(output_dir, starstr + f"[normal][index {i}].png"))  # Plot 1
         print(f"Plot generated for {starstr} (normal periodogram).")
         plt.close('all')
-
-        plt.plot(x2, y2, 'o', x2_new,y2_new)
-        plt.xlim(x2[0]-1,x2[-1]+1)
-        plt.savefig(os.path.join(output_dir, starstr + f"[arange][index {i}].png"))  # Plot 1
-        print(f"Plot generated for {starstr} (arange periodogram).")
-        plt.close('all')
->>>>>>> fixed:lightCurves/analyzeLightcurves.py
